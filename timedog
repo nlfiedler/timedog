@@ -1,0 +1,163 @@
+#!/usr/bin/perl
+#
+# $Id: $
+#
+# timedog
+#
+#   J.D. Smith (jdtsmith A@T gmail _dot_ com)
+#
+# Display the files which time machine backed up in its most recent
+# backup (or any of your choosing).  Uses the fact that Time Machine
+# creates hard links for unchanged files and directories.  Reports old
+# and new sizes, along with the total file count and backup size.
+#
+# Usage:  timedog [-d depth] [-l] [latest]
+#
+#   N.B. You must first mount the time machine volume, and change to
+#   the directory containing your time machine backup directories, the
+#   ones named like 2008-07-14-112245/.  This can be found in the
+#   directory /Volumes/TM/Backups.backupdb/hostname or similar.
+#
+#     latest: The backup directory for which you'd like to see the
+#             changed contents.  Defaults to the most recent (the one
+#             linked to by Latest)
+#
+#         -l: Omit symbolic links from the summary.  For whatever
+#             reason, Time Machine creates a new version of a symbolic
+#             link each and every time it backs up.
+#
+#   -d depth: Summarize changes in directories down to a given depth.
+#             By default, all files are printed (which can get
+#             lengthy).
+#
+# Example:
+#   % cd /Volumes/TM/Backups.backupdb/myhost
+#   % timedog -d 5 -l
+#
+###############################################################################
+#
+# LICENSE
+#
+#  Copyright (C) 2008-2009 J.D. Smith
+#
+#  This file is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published
+#  by the Free Software Foundation; either version 2, or (at your
+#  option) any later version.
+#
+#  This File is distributed in the hope that it will be useful, but
+#  WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+#  General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this file; see the file COPYING.  If not, write to the
+#  Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+#  Boston, MA 02110-1301, USA.
+#
+###############################################################################
+
+
+use File::Find;
+use Fcntl ':mode';
+use Getopt::Std;
+
+getopt('d');
+
+sub bytes {
+  my $bytes=shift;
+  $format=shift || ".1";
+  @suff=("B","KB","MB","GB","TB");
+  for ($suff=shift @suff; $#suff>=0 and $bytes>=1000.; $suff=shift @suff) {
+    $bytes/=1024.;
+  }
+  return int($bytes) . $suff if int($bytes)==$bytes;
+  return sprintf("%${format}f",$bytes) . $suff;
+}
+
+sub summarize {
+  ($size,$size_old,$old_exists,$name)=@_;
+  printf "%9s->%9s %s\n",$old_exists?bytes($size_old):"....  ",
+    bytes($size),$name;
+}
+
+
+opendir DIR,"." or die "Can't open directory.";
+@files=sort grep {m|[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]+|} readdir(DIR);
+die "None or only one Time Machine backups found." if @files == 1;
+
+if (@ARGV) {
+  $latest=$ARGV[0];
+  $latest=~s|/$||;
+  foreach (@files) {
+    last if $_ eq $latest;
+    $last=$_;
+  }
+  die "Invalid backup directory" if !defined($last) || $last eq $latest;
+} else {
+  ($last,$latest)=@files[$#files-1..$#files];
+}
+
+print "==> Comparing TM backup $latest to $last\n";
+
+my ($old_exists,$rold_exists,$rsize,$rsize_old);
+$total_size=0;
+$total_cnt=0;
+
+find({wanted =>
+      sub{
+	($dev,$ino,$mode,$nlink,$uid,$gid,$rdev,$size) =
+	  lstat($_);
+	($old=$_)=~s/^$latest/$last/;
+	if (-e $old) {
+	  ($dev, $ino_old,$mode_old,
+	   $nlink,$uid,$gid,$rdev,$size_old) = lstat($old);
+	  if ($ino == $ino_old) { # Prune matching
+	    $File::Find::prune=1 if -d;
+	    return
+	  }
+	  $old_exists=1;
+	} else {$old_exists=0;}
+	$total_size+=$size;
+	$total_cnt++;
+	($name=$_)=~s/^$latest//;
+
+	if ($opt_d) {
+	  $depth=$name=~tr|/||;
+	  #print "DEPTH: $depth\n";
+	  $rsize+=$size;
+	  $rsize_old+=$size_old if $old_exists;
+	  return if S_ISDIR($mode) || $depth > $opt_d; # Post will handle
+	}
+	$link=S_ISLNK($mode);
+	return if $opt_l && $link;
+	$name.="/" if S_ISDIR($mode);
+	$name.="@" if $link;
+	summarize($size,$size_old,$old_exists,$name,S_ISDIR($mode));
+      },
+      preprocess =>
+      (!$opt_d)?0:
+      sub{
+	$depth=$File::Find::dir=~tr|/||;
+	if ($depth<=$opt_d) {
+	  # Starting a new printable directory; zero out sizes
+	  $rsize=$rsize_old=0 ;
+	  $rold_exists=-e $File::Find::dir;
+	}
+	@_;
+      },
+      postprocess =>
+      (!$opt_d)?0:
+      sub{
+	$depth=$File::Find::dir=~tr|/||;
+	return if $depth > $opt_d;
+	# This directory is at or below the depth, summarize it
+	($name=$File::Find::dir)=~s/^$latest//;
+	summarize($rsize,$rsize_old,$rold_exists,$name.'/')
+	  if $rsize || $rsize_old;
+	$rsize=$rsize_old=0
+      },
+      no_chdir => 1}, $latest);
+
+print "==> Total Backup: $total_cnt changed files, ",
+  bytes($total_size,".2"),"\n";
