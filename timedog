@@ -9,9 +9,10 @@
 # Display the files which time machine backed up in its most recent
 # backup (or any of your choosing).  Uses the fact that Time Machine
 # creates hard links for unchanged files and directories.  Reports old
-# and new sizes, along with the total file count and backup size.
+# and new sizes of the changed files, along with the total file count
+# and backup size.
 #
-# Usage:  timedog [-d depth] [-l] [latest]
+# Usage:  timedog [-d depth] [-l] [-n] [latest]
 #
 #   N.B. You must first mount the time machine volume, and change to
 #   the directory containing your time machine backup directories, the
@@ -26,9 +27,13 @@
 #             reason, Time Machine creates a new version of a symbolic
 #             link each and every time it backs up.
 #
-#   -d depth: Summarize changes in directories down to a given depth.
-#             By default, all files are printed (which can get
-#             lengthy).
+#         -n  Use simple fixed width formatting, and omit summaries.
+#
+#   -d depth: By default, all files are printed, which can get
+#             lengthy.  With this option, summarize changes in
+#             directories only down to the given depth.  The number of
+#             files and subdirectories which changed will be reported
+#             as [n].
 #
 # Example:
 #   % cd /Volumes/TM/Backups.backupdb/myhost
@@ -76,14 +81,23 @@ sub bytes {
 }
 
 sub summarize {
-  ($size,$size_old,$old_exists,$name)=@_;
-  printf "%9s->%9s %s\n",$old_exists?bytes($size_old):"....  ",
-    bytes($size),$name;
+  ($size,$size_old,$old_exists,$name,$cnt)=@_;
+  if ($opt_n) {
+    printf "%12d %12d %s\n",$old_exists?$size_old:0,$size,$name;
+  } else {
+    if ($opt_d) {
+      printf "%9s->%9s %6s %s\n",$old_exists?bytes($size_old):"....  ",
+	bytes($size),$cnt?"[$cnt]":"",$name;
+    } else {
+      printf "%9s->%9s %s\n",$old_exists?bytes($size_old):"....  ",
+	bytes($size),$name;
+    }
+  }
 }
 
 
 opendir DIR,"." or die "Can't open directory.";
-@files=sort grep {m|[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]+|} readdir(DIR);
+@files=sort grep {m|[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]+$|} readdir(DIR);
 die "None or only one Time Machine backups found." if @files == 1;
 
 if (@ARGV) {
@@ -98,7 +112,7 @@ if (@ARGV) {
   ($last,$latest)=@files[$#files-1..$#files];
 }
 
-print "==> Comparing TM backup $latest to $last\n";
+print "==> Comparing TM backup $latest to $last\n" unless $opt_n;
 
 my ($old_exists,$rold_exists,$rsize,$rsize_old);
 $total_size=0;
@@ -118,22 +132,27 @@ find({wanted =>
 	  }
 	  $old_exists=1;
 	} else {$old_exists=0;}
+
+
 	$total_size+=$size;
+
+	$link=S_ISLNK($mode);
+	return if $opt_l && $link;
+
+	# Don't include links in the count
 	$total_cnt++;
 	($name=$_)=~s/^$latest//;
 
 	if ($opt_d) {
 	  $depth=$name=~tr|/||;
-	  #print "DEPTH: $depth\n";
 	  $rsize+=$size;
 	  $rsize_old+=$size_old if $old_exists;
+	  $rcnt++;
 	  return if S_ISDIR($mode) || $depth > $opt_d; # Post will handle
 	}
-	$link=S_ISLNK($mode);
-	return if $opt_l && $link;
 	$name.="/" if S_ISDIR($mode);
 	$name.="@" if $link;
-	summarize($size,$size_old,$old_exists,$name,S_ISDIR($mode));
+	summarize($size,$size_old,$old_exists,$name);
       },
       preprocess =>
       (!$opt_d)?0:
@@ -141,7 +160,7 @@ find({wanted =>
 	$depth=$File::Find::dir=~tr|/||;
 	if ($depth<=$opt_d) {
 	  # Starting a new printable directory; zero out sizes
-	  $rsize=$rsize_old=0 ;
+	  $rsize=$rsize_old=$rcnt=0;
 	  $rold_exists=-e $File::Find::dir;
 	}
 	@_;
@@ -153,11 +172,11 @@ find({wanted =>
 	return if $depth > $opt_d;
 	# This directory is at or below the depth, summarize it
 	($name=$File::Find::dir)=~s/^$latest//;
-	summarize($rsize,$rsize_old,$rold_exists,$name.'/')
+	summarize($rsize,$rsize_old,$rold_exists,$name.'/',$rcnt)
 	  if $rsize || $rsize_old;
-	$rsize=$rsize_old=0
+	$rsize=$rsize_old=$rcnt=0;
       },
       no_chdir => 1}, $latest);
 
-print "==> Total Backup: $total_cnt changed files, ",
-  bytes($total_size,".2"),"\n";
+print "==> Total Backup: $total_cnt changed files/directories, ",
+  bytes($total_size,".2"),"\n" unless $opt_n;
