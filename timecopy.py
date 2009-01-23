@@ -91,4 +91,9 @@ if __name__ == '__main__':
     if len(sys.argv) != 2:
         print 'Usage: timecopy.py <path>'
     else:
-        walktree(sys.argv[1], BasicTreeVisitor())
+        path = sys.argv[1]
+        mode = os.lstat(path)[ST_MODE]
+        if S_ISDIR(mode):
+            walktree(path, BasicTreeVisitor())
+        else:
+            print '%s is not a directory!' % path
