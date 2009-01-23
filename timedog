@@ -1,16 +1,14 @@
 #!/usr/bin/perl
 #
-# $Id$
-#
 # timedog
 #
-#   J.D. Smith (jdtsmith A@T gmail _dot_ com)
+#   J.D. Smith (jdtsmith A@T gmail _d0t_ com)
 #
 # Display the files which time machine backed up in its most recent
 # backup (or any of your choosing).  Uses the fact that Time Machine
 # creates hard links for unchanged files and directories.  Reports old
 # and new sizes of the changed files, along with the total file count
-# and backup size.
+# and backup size.  The string "...." denotes files created or deleted.
 #
 # Usage:  timedog [-d depth] [-l] [-n] [latest]
 #
@@ -21,29 +19,38 @@
 #
 #     latest: The backup directory for which you'd like to see the
 #             changed contents.  Defaults to the most recent (the one
-#             linked to by Latest)
+#             linked to by Latest).
 #
 #         -l: Omit symbolic links from the summary.  For whatever
-#             reason, Time Machine creates a new version of a symbolic
-#             link each and every time it backs up.
+#             reason, Time Machine creates a new version of all
+#             symbolic links each and every time it backs up.
 #
-#         -n  Use simple fixed width formatting, and omit summaries.
+#         -n: Use simple fixed width formatting (useful for
+#             spreadsheet or other parsing), and omit summaries.
 #
 #   -d depth: By default, all files are printed, which can get
 #             lengthy.  With this option, summarize changes in
 #             directories only down to the given depth.  The number of
 #             files and subdirectories which changed will be reported
-#             as [n].
+#             as [n], after the before and after sizes for those
+#             changed files.
+#
+#         -s: Sort results by (current) size.
+#
+#    -m size: Omit from mention any file, or combined directory of
+#             files, smaller than size (bytes by default, but can
+#             be specified as K, M, G, T for kilo-, mega-, giga-, tera-
+#             bytes).
 #
 # Example:
 #   % cd /Volumes/TM/Backups.backupdb/myhost
-#   % timedog -d 5 -l
+#   % timedog -d 5 -m 1k -ls
 #
 ###############################################################################
-#
+# 
 # LICENSE
 #
-#  Copyright (C) 2008-2009 J.D. Smith
+#  Copyright (C) 2008, 2009 J.D. Smith
 #
 #  This file is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published
@@ -67,7 +74,7 @@ use File::Find;
 use Fcntl ':mode';
 use Getopt::Std;
 
-getopt('d');
+getopts('lnsd:m:');
 
 sub bytes {
   my $bytes=shift;
@@ -80,21 +87,26 @@ sub bytes {
   return sprintf("%${format}f",$bytes) . $suff;
 }
 
+
+# Summarize a changed file
 sub summarize {
   ($size,$size_old,$old_exists,$name,$cnt)=@_;
+  return if $opt_m && $size<$opt_m;
   if ($opt_n) {
-    printf "%12d %12d %s\n",$old_exists?$size_old:0,$size,$name;
+    push @summary,
+      [$size,sprintf("%12d %12d %s\n",$old_exists?$size_old:0,$size,$name)];
   } else {
     if ($opt_d) {
-      printf "%9s->%9s %6s %s\n",$old_exists?bytes($size_old):"....  ",
-	bytes($size),$cnt?"[$cnt]":"",$name;
+      push @summary,
+	[$size,sprintf("%9s->%9s %6s %s\n",$old_exists?bytes($size_old):".... ",
+		       bytes($size),$cnt?"[$cnt]":"",$name)];
     } else {
-      printf "%9s->%9s %s\n",$old_exists?bytes($size_old):"....  ",
-	bytes($size),$name;
+      push @summary,
+	[$size,sprintf("%9s->%9s %s\n",$old_exists?bytes($size_old):".... ",
+		       bytes($size),$name)];
     }
   }
 }
-
 
 opendir DIR,"." or die "Can't open directory.";
 @files=sort grep {m|[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]+$|} readdir(DIR);
@@ -118,6 +130,22 @@ my ($old_exists,$rold_exists,$rsize,$rsize_old);
 $total_size=0;
 $total_cnt=0;
 
+%conv=('k' => 1024, 'm' => 1024**2, 'g'=>1024**3, 't'=>1024**4);
+if ($opt_m){
+  $opt_m=~/([0-9.]+)([kmgt]?)/i;
+  $opt_m=$1;
+  $opt_m*=$conv{lc $2} if $2;
+}
+
+unless ($opt_n) {
+  if ($opt_d) {
+    print "    Depth: $opt_d directories  "
+  }
+  if ($opt_m) {
+    print "Omitting if smaller than: ",bytes($opt_m),"\n";
+  } else { print "\n" if $opt_d;}
+}
+    
 find({wanted =>
       sub{
 	($dev,$ino,$mode,$nlink,$uid,$gid,$rdev,$size) =
@@ -177,6 +205,12 @@ find({wanted =>
 	$rsize=$rsize_old=$rcnt=0;
       },
       no_chdir => 1}, $latest);
+
+if ($opt_s) {
+  foreach (map {$_->[1]} sort {$a->[0] <=> $b->[0]} @summary) { print;}
+} else {
+  foreach (map {$_->[1]} @summary) { print;}
+}
 
 print "==> Total Backup: $total_cnt changed files/directories, ",
   bytes($total_size,".2"),"\n" unless $opt_n;
