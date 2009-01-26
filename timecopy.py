@@ -22,8 +22,6 @@
 #
 # TODO EVENTUALLY
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# - Implement verbose mode
-# - Implement dry-run mode
 # - Allow resuming a copy of a directory tree
 #   - Check for incomplete copies
 #   - Only copy what hasn't been done already
@@ -36,6 +34,7 @@
 #
 import getopt
 import os
+import os.path
 import re
 import shutil
 import sys
@@ -71,12 +70,19 @@ def visitfiles(dir, visitor):
             elif S_ISREG(mode):
                 visitor.file(pathname)
             else:
-                print 'Unknown file %s' % pathname
+                print 'WARNING: unknown file %s' % pathname
         except OSError:
-            print 'Error reading %s' % pathname
+            print 'ERROR: reading %s' % pathname
+            # XXX: should stop now or keep going?
 
 class CopyInitialVisitor(TreeVisitor):
     """Copies a directory tree from one place to another."""
+
+    def __init__(self, verbose, dryrun):
+        """If verbose is True, display operations as they are performed
+           If dryrun is True, do not make any modifications on disk."""
+        self.verbose = verbose
+        self.dryrun = dryrun
 
     def copytree(self, src, dst):
         """Copies the directory tree rooted at src to dst."""
@@ -87,30 +93,39 @@ class CopyInitialVisitor(TreeVisitor):
     def dir(self, dir):
         # Create destination directory, copying stats and ownership.
         dst = re.sub(self.src, self.dst, dir)
-        os.mkdir(dst)
-        shutil.copystat(dir, dst)
-        stats = os.lstat(dir)
-        os.lchown(dst, stats[ST_UID], stats[ST_GID])
+        if self.verbose:
+            print "mkdir <%s>" % dst
+        if not self.dryrun:
+            os.mkdir(dst)
+            shutil.copystat(dir, dst)
+            stats = os.lstat(dir)
+            os.chown(dst, stats[ST_UID], stats[ST_GID])
         # Continue traversal...
         visitfiles(dir, self)
 
     def file(self, file):
         dst = re.sub(self.src, self.dst, file)
-        # Copy file contents from snapshot to destination.
-        shutil.copyfile(file, dst)
-        # Copy the permissions and accessed/modified times.
-        shutil.copystat(file, dst)
-        # Copy the owner/group values to destination.
-        stats = os.lstat(file)
-        os.lchown(dst, stats[ST_UID], stats[ST_GID])
+        if self.verbose:
+            print "cp <%s> <%s>" % (file, dst)
+        if not self.dryrun:
+            # Copy file contents from snapshot to destination.
+            shutil.copyfile(file, dst)
+            # Copy the permissions and accessed/modified times.
+            shutil.copystat(file, dst)
+            # Copy the owner/group values to destination.
+            stats = os.lstat(file)
+            os.chown(dst, stats[ST_UID], stats[ST_GID])
 
     def link(self, link):
         # Copy link to destination.
         lnk = os.readlink(link)
         dst = re.sub(self.src, self.dst, link)
-        os.symlink(lnk, dst)
-        stats = os.lstat(link)
-        os.lchown(dst, stats[ST_UID], stats[ST_GID])
+        if self.verbose:
+            print "ln -s <%s> <%s>" % (lnk, dst)
+        if not self.dryrun:
+            os.symlink(lnk, dst)
+            stats = os.lstat(link)
+            os.lchown(dst, stats[ST_UID], stats[ST_GID])
 
 class CopyBackupVisitor(TreeVisitor):
     """Copies a directory tree and its files, where those entries differ
@@ -120,8 +135,12 @@ class CopyBackupVisitor(TreeVisitor):
        done with that entry (directories are not traversed, files are
        not copied)."""
 
-    def __init__(self, old):
-        "old is the reference tree to which src will be compared"
+    def __init__(self, old, verbose, dryrun):
+        """If verbose is True, display operations as they are performed
+           If dryrun is True, do not make any modifications on disk.
+           old is the reference tree to which src will be compared."""
+        self.verbose = verbose
+        self.dryrun = dryrun
         self.old = old
 
     def copytree(self, src, dst):
@@ -136,60 +155,103 @@ class CopyBackupVisitor(TreeVisitor):
         ostats = os.lstat(old)
         dst = re.sub(self.src, self.dst, dir)
         if stats[ST_INO] != ostats[ST_INO]:
-            # Create destination directory, copying stats and ownership.
-            os.mkdir(dst)
-            shutil.copystat(dir, dst)
-            os.lchown(dst, stats[ST_UID], stats[ST_GID])
+            if self.verbose:
+                print "mkdir <%s>" % dst
+            if not self.dryrun:
+                # Create destination directory, copying stats and ownership.
+                os.mkdir(dst)
+                shutil.copystat(dir, dst)
+                os.chown(dst, stats[ST_UID], stats[ST_GID])
             # Continue traversal...
             visitfiles(dir, self)
         else:
-            # Create hard link in destination.
-            odst = re.sub(self.old, self.dst, dir)
-            os.link(dst, odst)
+            if self.verbose:
+                print "ln <%s> <%s>" % (dst, odst)
+            if not self.dryrun:
+                # Create hard link in destination.
+                odst = re.sub(self.old, self.dst, dir)
+                os.link(dst, odst)
 
     def file(self, file):
         stats = os.lstat(file)
         old = re.sub(self.src, self.old, file)
+        dst = re.sub(self.src, self.dst, file)
         ostats = os.lstat(old)
         if stats[ST_INO] != ostats[ST_INO]:
-            dst = re.sub(self.src, self.dst, file)
-            # Copy file contents from snapshot to destination.
-            shutil.copyfile(file, dst)
-            # Copy the permissions and accessed/modified times.
-            shutil.copystat(file, dst)
-            # Copy the owner/group values to destination.
-            os.lchown(dst, stats[ST_UID], stats[ST_GID])
+            if self.verbose:
+                print "cp <%s> <%s>" % (file, dst)
+            if not self.dryrun:
+                # Copy file contents from snapshot to destination.
+                shutil.copyfile(file, dst)
+                # Copy the permissions and accessed/modified times.
+                shutil.copystat(file, dst)
+                # Copy the owner/group values to destination.
+                os.chown(dst, stats[ST_UID], stats[ST_GID])
         else:
-            # Create hard link in destination.
-            odst = re.sub(self.old, self.dst, file)
-            os.link(dst, odst)
+            if self.verbose:
+                print "ln <%s> <%s>" % (dst, odst)
+            if not self.dryrun:
+                # Create hard link in destination.
+                odst = re.sub(self.old, self.dst, file)
+                os.link(dst, odst)
 
     def link(self, link):
         stats = os.lstat(link)
         old = re.sub(self.src, self.old, link)
+        dst = re.sub(self.src, self.dst, link)
         ostats = os.lstat(old)
         if stats[ST_INO] != ostats[ST_INO]:
-            # Copy link to destination.
             lnk = os.readlink(link)
-            dst = re.sub(self.src, self.dst, link)
-            os.symlink(lnk, dst)
-            os.lchown(dst, stats[ST_UID], stats[ST_GID])
+            if self.verbose:
+                print "ln -s <%s> <%s>" % (lnk, dst)
+            if not self.dryrun:
+                # Copy link to destination.
+                os.symlink(lnk, dst)
+                os.lchown(dst, stats[ST_UID], stats[ST_GID])
         else:
-            # Create hard link in destination.
-            odst = re.sub(self.old, self.dst, link)
-            os.link(dst, odst)
+            if self.verbose:
+                print "ln <%s> <%s>" % (dst, odst)
+            if not self.dryrun:
+                # Create hard link in destination.
+                odst = re.sub(self.old, self.dst, link)
+                os.link(dst, odst)
 
-def sortbackups(path):
-    """Returns a sorted list of Time Machine backups, with certain
-       entries pruned from the list (Latest and *.inProgress)."""
-    entries = os.listdir(path)
-    okay = lambda s: s != "Latest" and not s.endswith(".inProgress")
-    entries = [entry for entry in entries if okay(entry)]
-    entries.sort()
-    return entries
+def copybackupdb(src, dst, verbose, dryrun):
+    """Copy the backup database found in src to dst."""
+    # Validate that src contains a backup database.
+    database = os.path.join(src, 'Backups.backupdb')
+    if not os.path.exists(database):
+        print "ERROR: %s does not contain a Time Machine backup!" % src
+        sys.exit(2)
+    # TODO: copy bookkeeping files (really necessary?)
+    # Get a list of entries in the backupdb (typically just one).
+    hosts = os.listdir(database)
+    for host in hosts:
+        # Get the list of backup snapshots sorted by name (i.e. date).
+        entries = os.listdir(host)
+        okay = lambda s: s != "Latest" and not s.endswith(".inProgress")
+        entries = [entry for entry in entries if okay(entry)]
+        entries.sort()
+        def mkdest(src, dst):
+            stats = os.lstat(src)
+            if verbose:
+                print "mkdir <%s>" % dst
+            if not dryrun:
+                os.mkdir(dst)
+                shutil.copystat(src, dst)
+                os.chown(dst, stats[ST_UID], stats[ST_GID])
+        # Copy initial backup.
+        oldbkup = os.path.join(src, entries[0])
+        newbkup = os.path.join(dst, entries[0])
+        mkdest(oldbkup, newbkup)
+        visitor = CopyInitialVisitor(verbose, dryrun)
+        if verbose:
+            print "Copying backup %s..." % entries[0]
+        visitor.copytree(src, dst)
+        # TODO: copy backup snapshots
 
 def usage():
-    print "Usage: timecopy.py [-hv] <src> <dst>"
+    print "Usage: timecopy.py [-hnv] <src> <dst>"
     print ""
     print "Copies a Mac OS X Time Machine volume (set of backups) from one location"
     print "to another, such as from one disk to another, or from one disk image to"
@@ -211,12 +273,10 @@ def usage():
     print "\tPrints this usage information."
     print ""
     print "-n|--dry-run"
-    print "\tDo not make any changes to the destination volume."
-    print "\tTODO: NOT YET IMPLEMENTED"
+    print "\tDo not make any changes on disk."
     print ""
     print "-v|--verbose"
     print "\tPrints information about what the script is doing at each step."
-    print "\tTODO: NOT YET IMPLEMENTED"
 
 def main():
     """The main program method which handles user input and kicks off
@@ -229,34 +289,39 @@ def main():
         opts, args = getopt.getopt(sys.argv[1:], shortopts, longopts)
     except getopt.GetoptError, err:
         print str(err)
+        print "Invoke with -h for help."
         sys.exit(2)
     verbose = False
     dryrun = False
-    for o, v in opts:
-        if o in ("-v", "--verbose"):
+    for opt, val in opts:
+        if opt in ("-v", "--verbose"):
             verbose = True
-        elif o in ("-h", "--help"):
+        elif opt in ("-h", "--help"):
             usage()
             sys.exit()
-        elif o in ("-n", "--dry-run"):
+        elif opt in ("-n", "--dry-run"):
             dryrun = True
         else:
-            assert False, "unhandled option"
+            assert False, "unhandled option: %s" % opt
     if len(args) != 2:
-        usage()
+        print "Missing required arguments. Invoke with -h for help."
         sys.exit(2)
-    src = args[1]
-    dst = args[2]
-    mode = os.lstat(src)[ST_MODE]
-    if S_ISDIR(mode):
-        # Create destination if necessary.
-        if not os.path.exists(dst):
-            os.makedirs(dir)
-        # TODO: copy bookkeeping files -- is it really necessary?
-        # TODO: copy backups
-        pass
-    else:
-        print '%s is not a directory!' % src
+    # Check that the given source and destination exist.
+    src = args[0]
+    if not os.path.exists(src):
+        print "%s does not exist!" % src
+        sys.exit(1)
+    if not os.path.isdir(src):
+        print "%s is not a directory!" % src
+        sys.exit(1)
+    dst = args[1]
+    if not os.path.exists(dst):
+        print "%s does not exist!" % dst
+        sys.exit(1)
+    if not os.path.isdir(dst):
+        print "%s is not a directory!" % dst
+        sys.exit(1)
+    copybackupdb(src, dst, verbose, dryrun)
 
 if __name__ == '__main__':
     print 'THIS IS A WORK IN PROGRESS, DO NOT EXPECT IT TO WORK! (XXX)'
