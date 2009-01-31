@@ -34,6 +34,7 @@
 #   - Report the errors and keep going
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
+import errno
 import getopt
 import os
 import os.path
@@ -41,6 +42,7 @@ import re
 import shutil
 import sys
 from stat import *
+import traceback
 
 class TreeVisitor:
     """Visitor pattern for visitfiles function. As tree is traversed,
@@ -73,9 +75,38 @@ def visitfiles(dir, visitor):
                 visitor.file(pathname)
             else:
                 print 'WARNING: unknown file %s' % pathname
-        except OSError:
-            print 'ERROR: reading %s' % pathname
-            # XXX: should stop now or keep going?
+        except OSError, e:
+            print 'ERROR "%s": reading %s' % (os.strerror(e.errno), pathname)
+            traceback.print_exc()
+            sys.exit(2)
+
+def chown(path, uid, gid):
+    """Attempt to change the owner/group of the given file/directory using
+       os.lchown(). If this fails due to insufficient permissions, display
+       an appropriate error message and exit. Otherwise, raise the error."""
+    try:
+        # Use lchown so we do not follow symbolic links, just change the
+        # target as specified by the caller.
+        os.lchown(path, uid, gid)
+        # Note that it is possible the destination volume was mounted with
+        # the MNT_IGNORE_OWNERSHIP flag, in which case everything we create
+        # there will be owned by the _unknown user and group, no matter what
+        # we might want it to be. This is built into the XNU kernel.
+    except OSError, e:
+        if e.errno == errno.EPERM:
+            print "Cannot change owner of %s" % path
+            print "You probably need to run this script as the root user."
+            sys.exit(2)
+        else:
+            raise e
+
+def link(src, dst):
+    """Creates a hard link called 'dst' that points to 'src'.
+       Ensures that the src entry exists and raises an error if not."""
+    if os.path.exists(src):
+        os.link(src, dst)
+    else:
+        raise OSError(errno.ENOENT, "%s missing!" % src)
 
 class CopyInitialVisitor(TreeVisitor):
     """Copies a directory tree from one place to another."""
@@ -101,7 +132,7 @@ class CopyInitialVisitor(TreeVisitor):
             os.mkdir(dst)
             shutil.copystat(dir, dst)
             stats = os.lstat(dir)
-            os.chown(dst, stats[ST_UID], stats[ST_GID])
+            chown(dst, stats[ST_UID], stats[ST_GID])
         # Continue traversal...
         visitfiles(dir, self)
 
@@ -116,7 +147,7 @@ class CopyInitialVisitor(TreeVisitor):
             shutil.copystat(file, dst)
             # Copy the owner/group values to destination.
             stats = os.lstat(file)
-            os.chown(dst, stats[ST_UID], stats[ST_GID])
+            chown(dst, stats[ST_UID], stats[ST_GID])
 
     def link(self, link):
         # Copy link to destination.
@@ -127,7 +158,7 @@ class CopyInitialVisitor(TreeVisitor):
         if not self.dryrun:
             os.symlink(lnk, dst)
             stats = os.lstat(link)
-            os.lchown(dst, stats[ST_UID], stats[ST_GID])
+            chown(dst, stats[ST_UID], stats[ST_GID])
 
 class CopyBackupVisitor(TreeVisitor):
     """Copies a directory tree and its files, where those entries differ
@@ -163,7 +194,7 @@ class CopyBackupVisitor(TreeVisitor):
                 # Create destination directory, copying stats and ownership.
                 os.mkdir(dst)
                 shutil.copystat(dir, dst)
-                os.chown(dst, stats[ST_UID], stats[ST_GID])
+                chown(dst, stats[ST_UID], stats[ST_GID])
             # Continue traversal...
             visitfiles(dir, self)
         else:
@@ -172,7 +203,7 @@ class CopyBackupVisitor(TreeVisitor):
                 print "ln <%s> <%s>" % (dst, odst)
             if not self.dryrun:
                 # Create hard link in destination.
-                os.link(dst, odst)
+                link(dst, odst)
 
     def file(self, file):
         stats = os.lstat(file)
@@ -188,14 +219,14 @@ class CopyBackupVisitor(TreeVisitor):
                 # Copy the permissions and accessed/modified times.
                 shutil.copystat(file, dst)
                 # Copy the owner/group values to destination.
-                os.chown(dst, stats[ST_UID], stats[ST_GID])
+                chown(dst, stats[ST_UID], stats[ST_GID])
         else:
             odst = re.sub(self.old, self.dst, file)
             if self.verbose:
                 print "ln <%s> <%s>" % (dst, odst)
             if not self.dryrun:
                 # Create hard link in destination.
-                os.link(dst, odst)
+                link(dst, odst)
 
     def link(self, link):
         stats = os.lstat(link)
@@ -209,14 +240,14 @@ class CopyBackupVisitor(TreeVisitor):
             if not self.dryrun:
                 # Copy link to destination.
                 os.symlink(lnk, dst)
-                os.lchown(dst, stats[ST_UID], stats[ST_GID])
+                chown(dst, stats[ST_UID], stats[ST_GID])
         else:
             odst = re.sub(self.old, self.dst, link)
             if self.verbose:
                 print "ln <%s> <%s>" % (dst, odst)
             if not self.dryrun:
                 # Create hard link in destination.
-                os.link(dst, odst)
+                link(dst, odst)
 
 def copybackupdb(srcbase, dstbase, verbose, dryrun):
     """Copy the backup database found in srcbase to dstbase."""
@@ -227,6 +258,13 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun):
         sys.exit(2)
     dstdb = os.path.join(dstbase, 'Backups.backupdb')
     # XXX: what about the bookkeeping files at the root?
+    #      - When creating new file system, the following files are created
+    #        (so no need to copy these):
+    #        * .Trashes/
+    #        * .com.apple.timemachine.supported
+    #        * .fseventsd/
+    #      - Created later (when mounting?)
+    #        * .Spotlight-V100/
     # Get a list of entries in the backupdb (typically just one).
     hosts = os.listdir(srcdb)
     for host in hosts:
@@ -241,16 +279,16 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun):
             if verbose:
                 print "mkdir <%s>" % target
             if not dryrun:
-                os.mkdir(target)
+                os.makedirs(target)
                 shutil.copystat(source, target)
-                os.chown(target, stats[ST_UID], stats[ST_GID])
+                chown(target, stats[ST_UID], stats[ST_GID])
         # Copy initial backup.
         dst = os.path.join(dstdb, host)
         srcbkup = os.path.join(src, entries[0])
         dstbkup = os.path.join(dst, entries[0])
         mkdest(srcbkup, dstbkup)
         visitor = CopyInitialVisitor(verbose, dryrun)
-        print "Copying backup %s -- this will take a while..." % entries[0]
+        print "Copying backup %s -- this will probably take a while..." % entries[0]
         visitor.copytree(srcbkup, dstbkup)
         # Copy all subsequent backup snapshots.
         for entry in entries[1:]:
@@ -265,7 +303,7 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun):
             visitor.copytree(srcbkup, dstbkup)
 
 def usage():
-    print "Usage: timecopy.py [-hnv] <source> <target>"
+    print "Usage: timecopy.py [-hnv] [--nochown] <source> <target>"
     print ""
     print "Copies a Mac OS X Time Machine volume (set of backups) from one location"
     print "to another, such as from one disk to another, or from one disk image to"
@@ -289,6 +327,11 @@ def usage():
     print "-n|--dry-run"
     print "\tDo not make any changes on disk."
     print ""
+    print "--nochown"
+    print "\tDo not use chown to change the owner/group of the destination"
+    print "\tfiles. Generally only root can do that, and on network volumes"
+    print "\tthe Mac will make everything owned by the 'unknown' user anyway."
+    print ""
     print "-v|--verbose"
     print "\tPrints information about what the script is doing at each step."
 
@@ -298,7 +341,7 @@ def main():
 
     # Parse the command line arguments.
     shortopts = "hnv"
-    longopts = ["help", "dry-run" "verbose"]
+    longopts = ["help", "dry-run", "nochown", "verbose"]
     try:
         opts, args = getopt.getopt(sys.argv[1:], shortopts, longopts)
     except getopt.GetoptError, err:
@@ -315,6 +358,10 @@ def main():
             sys.exit()
         elif opt in ("-n", "--dry-run"):
             dryrun = True
+        elif opt == '--nochown':
+            # Nullify the chown function defined above.
+            global chown
+            chown = lambda path, uid, gid: ""
         else:
             assert False, "unhandled option: %s" % opt
     if len(args) != 2:
