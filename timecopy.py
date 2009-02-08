@@ -41,6 +41,7 @@ import os.path
 import re
 import shutil
 import sys
+import time
 from stat import *
 import traceback
 
@@ -94,9 +95,20 @@ def chown(path, uid, gid):
         # we might want it to be. This is built into the XNU kernel.
     except OSError, e:
         if e.errno == errno.EPERM:
-            print "Cannot change owner of %s" % path
-            print "You probably need to run this script as the root user."
-            sys.exit(2)
+            # Strangely root has problems changing symlinks that point
+            # to non-existent entries, need to filter out and ignore
+            # (we are most likely copying to an external disk anyway,
+            # in which case all files are owned by the _unknown user).
+            mode = os.lstat(path)[ST_MODE]
+            if not S_ISLNK(mode):
+                # Sometimes mysteriously fails to chown directories.
+                # Try again in one second; if it fails again ignore
+                # the problem and move on.
+                time.sleep(1)
+                try:
+                    os.chown(path, uid, gid)
+                except OSError:
+                    pass
         else:
             raise e
 
