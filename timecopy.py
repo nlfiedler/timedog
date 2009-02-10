@@ -17,22 +17,9 @@
 #
 # $Id$
 #
-
-#####################################################################
-#XXX   WORK IN PROGRESS -- WORK IN PROGRESS -- WORK IN PROGRESS   ###
-#####################################################################
 #
 # Invoke this script with '--help' option for detailed description of
 # what it does and how you can use it.
-#
-# TODO EVENTUALLY
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# - Allow resuming a copy of a directory tree
-#   - Check for incomplete copies
-#   - Only copy what hasn't been done already
-# - Handle errors gracefully
-#   - Report the errors and keep going
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
 import errno
 import getopt
@@ -180,13 +167,17 @@ class CopyBackupVisitor(TreeVisitor):
        done with that entry (directories are not traversed, files are
        not copied)."""
 
-    def __init__(self, old, verbose, dryrun):
+    def __init__(self, old, prev, curr, verbose, dryrun):
         """If verbose is True, display operations as they are performed
            If dryrun is True, do not make any modifications on disk.
-           old is the reference tree to which src will be compared."""
+           old is the reference tree to which src will be compared.
+           prev is the entry name of the previous backup.
+           curr is the entry name of the backup being copied"""
         self.verbose = verbose
         self.dryrun = dryrun
         self.old = old
+        self.prev = prev
+        self.curr = curr
 
     def copytree(self, src, dst):
         "Copy the tree rooted at src to dst"
@@ -194,12 +185,23 @@ class CopyBackupVisitor(TreeVisitor):
         self.dst = dst
         visitfiles(src, self)
 
+# XXX: somehow silently failing to copy everything for a snapshot; compared
+#      to the old backup, the copy procedure is missing a lot of entries
+
     def dir(self, dir):
         stats = os.lstat(dir)
         old = re.sub(self.src, self.old, dir)
-        ostats = os.lstat(old)
+        try:
+            ostats = os.lstat(old)
+        except OSError, e:
+            if e.errno in (errno.ENOENT, errno.ENOTDIR, errno.EISDIR):
+                # File became directory, or vice versa, or just isn't there.
+                # XXX: are we losing files?
+                ostats = None
+            else:
+                raise e
         dst = re.sub(self.src, self.dst, dir)
-        if stats[ST_INO] != ostats[ST_INO]:
+        if ostats is None or stats[ST_INO] != ostats[ST_INO]:
             if self.verbose:
                 print "mkdir <%s>" % dst
             if not self.dryrun:
@@ -210,19 +212,27 @@ class CopyBackupVisitor(TreeVisitor):
             # Continue traversal...
             visitfiles(dir, self)
         else:
-            odst = re.sub(self.old, self.dst, dir)
+            odst = re.sub(self.curr, self.prev, dst)
             if self.verbose:
                 print "ln <%s> <%s>" % (dst, odst)
             if not self.dryrun:
                 # Create hard link in destination.
-                link(dst, odst)
+                link(odst, dst)
 
     def file(self, file):
         stats = os.lstat(file)
         old = re.sub(self.src, self.old, file)
         dst = re.sub(self.src, self.dst, file)
-        ostats = os.lstat(old)
-        if stats[ST_INO] != ostats[ST_INO]:
+        try:
+            ostats = os.lstat(old)
+        except OSError, e:
+            if e.errno in (errno.ENOENT, errno.ENOTDIR, errno.EISDIR):
+                # File became directory, or vice versa, or just isn't there.
+                # XXX: are we losing files?
+                ostats = None
+            else:
+                raise e
+        if ostats is None or stats[ST_INO] != ostats[ST_INO]:
             if self.verbose:
                 print "cp <%s> <%s>" % (file, dst)
             if not self.dryrun:
@@ -233,19 +243,27 @@ class CopyBackupVisitor(TreeVisitor):
                 # Copy the owner/group values to destination.
                 chown(dst, stats[ST_UID], stats[ST_GID])
         else:
-            odst = re.sub(self.old, self.dst, file)
+            odst = re.sub(self.curr, self.prev, dst)
             if self.verbose:
                 print "ln <%s> <%s>" % (dst, odst)
             if not self.dryrun:
                 # Create hard link in destination.
-                link(dst, odst)
+                link(odst, dst)
 
     def link(self, link):
         stats = os.lstat(link)
         old = re.sub(self.src, self.old, link)
         dst = re.sub(self.src, self.dst, link)
-        ostats = os.lstat(old)
-        if stats[ST_INO] != ostats[ST_INO]:
+        try:
+            ostats = os.lstat(old)
+        except OSError, e:
+            if e.errno in (errno.ENOENT, errno.ENOTDIR, errno.EISDIR):
+                # File became directory, or vice versa, or just isn't there.
+                # XXX: are we losing files?
+                ostats = None
+            else:
+                raise e
+        if ostats is None or stats[ST_INO] != ostats[ST_INO]:
             lnk = os.readlink(link)
             if self.verbose:
                 print "ln -s <%s> <%s>" % (lnk, dst)
@@ -254,12 +272,12 @@ class CopyBackupVisitor(TreeVisitor):
                 os.symlink(lnk, dst)
                 chown(dst, stats[ST_UID], stats[ST_GID])
         else:
-            odst = re.sub(self.old, self.dst, link)
+            odst = re.sub(self.curr, self.prev, dst)
             if self.verbose:
                 print "ln <%s> <%s>" % (dst, odst)
             if not self.dryrun:
                 # Create hard link in destination.
-                link(dst, odst)
+                link(odst, dst)
 
 def copybackupdb(srcbase, dstbase, verbose, dryrun):
     """Copy the backup database found in srcbase to dstbase."""
@@ -269,14 +287,6 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun):
         print "ERROR: %s does not contain a Time Machine backup!" % srcbase
         sys.exit(2)
     dstdb = os.path.join(dstbase, 'Backups.backupdb')
-    # XXX: what about the bookkeeping files at the root?
-    #      - When creating new file system, the following files are created
-    #        (so no need to copy these):
-    #        * .Trashes/
-    #        * .com.apple.timemachine.supported
-    #        * .fseventsd/
-    #      - Created later (when mounting?)
-    #        * .Spotlight-V100/
     # Get a list of entries in the backupdb (typically just one).
     hosts = os.listdir(srcdb)
     for host in hosts:
@@ -298,21 +308,43 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun):
         dst = os.path.join(dstdb, host)
         srcbkup = os.path.join(src, entries[0])
         dstbkup = os.path.join(dst, entries[0])
-        mkdest(srcbkup, dstbkup)
-        visitor = CopyInitialVisitor(verbose, dryrun)
-        print "Copying backup %s -- this will probably take a while..." % entries[0]
-        visitor.copytree(srcbkup, dstbkup)
+        if os.path.exists(dstbkup):
+            print "%s already exists, skipping..." % entries[0]
+        else:
+            mkdest(srcbkup, dstbkup)
+            visitor = CopyInitialVisitor(verbose, dryrun)
+            print "Copying backup %s -- this will probably take a while..." % entries[0]
+            visitor.copytree(srcbkup, dstbkup)
         # Copy all subsequent backup snapshots.
+        prev = entries[0]
         for entry in entries[1:]:
             # Here previous is the backup before the one we are about to
             # copy; it is used to determine which entries are hard links.
             previous = srcbkup
             srcbkup = os.path.join(src, entry)
             dstbkup = os.path.join(dst, entry)
-            mkdest(srcbkup, dstbkup)
-            visitor = CopyBackupVisitor(previous, verbose, dryrun)
-            print "Copying backup %s..." % entries[0]
-            visitor.copytree(srcbkup, dstbkup)
+            if os.path.exists(dstbkup):
+                print "%s already exists, skipping..." % entry
+            else:
+                mkdest(srcbkup, dstbkup)
+                visitor = CopyBackupVisitor(previous, prev, entry, verbose, dryrun)
+                print "Copying backup %s..." % entry
+                visitor.copytree(srcbkup, dstbkup)
+            prev = entry
+        # Create Latest symlink pointing to last entry.
+        os.symlink(os.path.join(dst, 'Latest'), entries[-1])
+    # Copy the MAC address dotfile(s) that TM creates.
+    # XXX: this part is not yet tested
+    entries = os.listdir(srcbase)
+    regex = re.compile('^\.[0-9a-f]{12}$')
+    for entry in entries:
+        if regex.match(entry):
+            src = os.path.join(srcbase, entry)
+            dst = os.path.join(dstbase, entry)
+            shutil.copyfile(src, dst)
+            shutil.copystat(src, dst)
+            stats = os.lstat(src)
+            chown(dst, stats[ST_UID], stats[ST_GID])
 
 def usage():
     print "Usage: timecopy.py [-hnv] [--nochown] <source> <target>"
@@ -401,5 +433,4 @@ def main():
         sys.exit(1)
 
 if __name__ == '__main__':
-    print 'THIS IS A WORK IN PROGRESS, DO NOT EXPECT IT TO WORK! (XXX)'
     main()
