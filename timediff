@@ -1,0 +1,87 @@
+#!/bin/bash
+#
+# Copyright (c) 2009 Nathan Fiedler
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# $Id$
+#
+######################################################################
+#
+# Given two supposedly identical Time Machine volumes, run the timedog
+# script on each backup (e.g. 2008-02-19-005705) in both volumes and
+# compare the output to determine that they are indeed truly identical.
+#
+# Usage: sudo timediff.sh /usr/local/bin/timedog \
+#              /Volume/OldBackup/Backups.backupdb/hostname \
+#              /Volume/NewBackup/Backups.backupdb/hostname
+#
+# You must supply the path to the timedog script as the first argument
+# to this script, and the paths to the old and new Time Machine volumes,
+# including the host name of the backups to compare. Run the 'hostname'
+# command in the Terminal to get the name of your machine.
+#
+# Typically must be run with sudo to visit certain directories, otherwise
+# you will get false negatives.
+#
+######################################################################
+
+[ -z "$1" ] && echo "Missing path to timedog script!" && exit 3
+if [ ! -x "$1" ]; then
+    echo "$1 must exist and be executable!"
+    exit 3
+fi
+TIMEDOG=$1
+[ -z "$2" ] && echo "Missing required source path!" && exit 3
+SRC=`echo $2 | sed -e 's|/$||'`
+[ -z "$3" ] && echo "Missing required target path!" && exit 3
+TGT=`echo $3 | sed -e 's|/$||'`
+
+PWD=`pwd`
+SCRIPT=`basename $0`
+TMP1=`mktemp -t ${SCRIPT}`
+if [ $? != 0 ]; then
+    echo "Failed to create temporary file!"
+    exit 1
+fi
+TMP2=`mktemp -t ${SCRIPT}`
+if [ $? != 0 ]; then
+    echo "Failed to create temporary file!"
+    exit 1
+fi
+
+# Get all of the snapshots, except the first one, and the other cruft.
+# We trust that ls sorts the entries for us, as stated in the man page.
+for SNAP in `ls $SRC | egrep -v '(Latest|*.inProgress)' | sed -e '1d'`; do
+    if [ ! -d "$TGT/$SNAP" ]; then
+        echo "$SNAP missing in $TGT location!"
+        exit
+    fi
+
+    echo "Processing $SNAP, please be patient..."
+    cd $SRC
+    $TIMEDOG $SNAP > $TMP1
+    cd $TGT
+    $TIMEDOG $SNAP > $TMP2
+
+    diff -q $TMP1 $TMP2
+    if [ $? = 1 ]; then
+        echo "$SNAP differs between $SRC and $TGT!"
+        exit 2
+    fi
+done
+
+cd $PWD
+rm -f $TMP1
+rm -f $TMP2
