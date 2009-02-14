@@ -30,7 +30,6 @@ import shutil
 import sys
 import time
 from stat import *
-import traceback
 
 class TreeVisitor:
     """Visitor pattern for visitfiles function. As tree is traversed,
@@ -65,7 +64,6 @@ def visitfiles(dir, visitor):
                 print 'WARNING: unknown file %s' % pathname
         except OSError, e:
             print 'ERROR "%s": reading %s' % (os.strerror(e.errno), pathname)
-            traceback.print_exc()
             sys.exit(2)
 
 def chown(path, uid, gid):
@@ -185,9 +183,6 @@ class CopyBackupVisitor(TreeVisitor):
         self.dst = dst
         visitfiles(src, self)
 
-# XXX: somehow silently failing to copy everything for a snapshot; compared
-#      to the old backup, the copy procedure is missing a lot of entries
-
     def dir(self, dir):
         stats = os.lstat(dir)
         old = re.sub(self.src, self.old, dir)
@@ -196,7 +191,6 @@ class CopyBackupVisitor(TreeVisitor):
         except OSError, e:
             if e.errno in (errno.ENOENT, errno.ENOTDIR, errno.EISDIR):
                 # File became directory, or vice versa, or just isn't there.
-                # XXX: are we losing files?
                 ostats = None
             else:
                 raise e
@@ -228,7 +222,6 @@ class CopyBackupVisitor(TreeVisitor):
         except OSError, e:
             if e.errno in (errno.ENOENT, errno.ENOTDIR, errno.EISDIR):
                 # File became directory, or vice versa, or just isn't there.
-                # XXX: are we losing files?
                 ostats = None
             else:
                 raise e
@@ -259,7 +252,6 @@ class CopyBackupVisitor(TreeVisitor):
         except OSError, e:
             if e.errno in (errno.ENOENT, errno.ENOTDIR, errno.EISDIR):
                 # File became directory, or vice versa, or just isn't there.
-                # XXX: are we losing files?
                 ostats = None
             else:
                 raise e
@@ -332,9 +324,11 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun):
                 visitor.copytree(srcbkup, dstbkup)
             prev = entry
         # Create Latest symlink pointing to last entry.
-        os.symlink(os.path.join(dst, 'Latest'), entries[-1])
+        latest = os.path.join(dst, 'Latest')
+        if os.path.lexists(latest):
+            os.unlink(latest)
+        os.symlink(entries[-1], latest)
     # Copy the MAC address dotfile(s) that TM creates.
-    # XXX: this part is not yet tested
     entries = os.listdir(srcbase)
     regex = re.compile('^\.[0-9a-f]{12}$')
     for entry in entries:
