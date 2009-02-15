@@ -27,6 +27,7 @@ import os
 import os.path
 import re
 import shutil
+import subprocess
 import sys
 import time
 from stat import *
@@ -325,9 +326,17 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun):
             prev = entry
         # Create Latest symlink pointing to last entry.
         latest = os.path.join(dst, 'Latest')
-        if os.path.lexists(latest):
-            os.unlink(latest)
-        os.symlink(entries[-1], latest)
+        if verbose:
+            print "ln -s <%s> <%s>" % (entries[-1], latest)
+        if not dryrun:
+            if os.path.lexists(latest):
+                # Seems root cannot delete the symlink, so have the real
+                # user perform the delete for us.
+                user = subprocess.Popen(["who", "am", "i"],
+                        stdout=subprocess.PIPE).communicate()[0]
+                user = user.split()[0]
+                os.system("sudo -u %s unlink %s"% (user, latest))
+            os.symlink(entries[-1], latest)
     # Copy the MAC address dotfile(s) that TM creates.
     entries = os.listdir(srcbase)
     regex = re.compile('^\.[0-9a-f]{12}$')
@@ -335,10 +344,13 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun):
         if regex.match(entry):
             src = os.path.join(srcbase, entry)
             dst = os.path.join(dstbase, entry)
-            shutil.copyfile(src, dst)
-            shutil.copystat(src, dst)
-            stats = os.lstat(src)
-            chown(dst, stats[ST_UID], stats[ST_GID])
+            if verbose:
+                print "cp <%s> <%s>" % (src, dst)
+            if not dryrun:
+                shutil.copyfile(src, dst)
+                shutil.copystat(src, dst)
+                stats = os.lstat(src)
+                chown(dst, stats[ST_UID], stats[ST_GID])
 
 def usage():
     print "Usage: timecopy.py [-hnv] [--nochown] <source> <target>"
