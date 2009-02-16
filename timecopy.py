@@ -27,10 +27,12 @@ import os
 import os.path
 import re
 import shutil
+from stat import *
 import subprocess
 import sys
 import time
-from stat import *
+from xattr import xattr
+from xattr.constants import *
 
 class TreeVisitor:
     """Visitor pattern for visitfiles function. As tree is traversed,
@@ -106,14 +108,36 @@ def link(src, dst):
     else:
         raise OSError(errno.ENOENT, "%s missing!" % src)
 
+def copyxattr(src, dst):
+    """Copy the extended attributes from src to dst using xattr."""
+    # See http://pypi.python.org/pypi/xattr for a (possibly outdated)
+    # version of xattr. A (possibly newer) version is included with
+    # Python on the Mac.
+    sx = xattr(src)
+    dx = xattr(dst)
+    # Make sure not to follow symbolic links as we always work on the
+    # links themselves, not the (possibly) non-existent target.
+    attrs = sx.list(XATTR_NOFOLLOW)
+    try:
+        for name in attrs:
+            value = sx.get(name, XATTR_NOFOLLOW)
+            dx.set(name, value, XATTR_NOFOLLOW)
+    except IOError:
+        # Fails for certain directories which we will ignore.
+        # All others, show a warning.
+        if not dst.endswith(("/etc", "/tmp", "/var")):
+            print "WARNING: cannot xattr %s" % dst
+
 class CopyInitialVisitor(TreeVisitor):
     """Copies a directory tree from one place to another."""
 
-    def __init__(self, verbose, dryrun):
+    def __init__(self, verbose, dryrun, extattr):
         """If verbose is True, display operations as they are performed
-           If dryrun is True, do not make any modifications on disk."""
+           If dryrun is True, do not make any modifications on disk.
+           If extattr is True, just copy the extended attributes."""
         self.verbose = verbose
         self.dryrun = dryrun
+        self.extattr = extattr
 
     def copytree(self, src, dst):
         """Copies the directory tree rooted at src to dst."""
@@ -131,6 +155,8 @@ class CopyInitialVisitor(TreeVisitor):
             shutil.copystat(dir, dst)
             stats = os.lstat(dir)
             chown(dst, stats[ST_UID], stats[ST_GID])
+        if not self.dryrun or self.extattr:
+            copyxattr(dir, dst)
         # Continue traversal...
         visitfiles(dir, self)
 
@@ -146,6 +172,8 @@ class CopyInitialVisitor(TreeVisitor):
             # Copy the owner/group values to destination.
             stats = os.lstat(file)
             chown(dst, stats[ST_UID], stats[ST_GID])
+        if not self.dryrun or self.extattr:
+            copyxattr(file, dst)
 
     def link(self, link):
         # Copy link to destination.
@@ -157,6 +185,8 @@ class CopyInitialVisitor(TreeVisitor):
             os.symlink(lnk, dst)
             stats = os.lstat(link)
             chown(dst, stats[ST_UID], stats[ST_GID])
+        if not self.dryrun or self.extattr:
+            copyxattr(link, dst)
 
 class CopyBackupVisitor(TreeVisitor):
     """Copies a directory tree and its files, where those entries differ
@@ -166,9 +196,10 @@ class CopyBackupVisitor(TreeVisitor):
        done with that entry (directories are not traversed, files are
        not copied)."""
 
-    def __init__(self, old, prev, curr, verbose, dryrun):
+    def __init__(self, old, prev, curr, verbose, dryrun, extattr):
         """If verbose is True, display operations as they are performed
            If dryrun is True, do not make any modifications on disk.
+           If extattr is True, just copy the extended attributes.
            old is the reference tree to which src will be compared.
            prev is the entry name of the previous backup.
            curr is the entry name of the backup being copied"""
@@ -177,6 +208,7 @@ class CopyBackupVisitor(TreeVisitor):
         self.old = old
         self.prev = prev
         self.curr = curr
+        self.extattr = extattr
 
     def copytree(self, src, dst):
         "Copy the tree rooted at src to dst"
@@ -204,6 +236,8 @@ class CopyBackupVisitor(TreeVisitor):
                 os.mkdir(dst)
                 shutil.copystat(dir, dst)
                 chown(dst, stats[ST_UID], stats[ST_GID])
+            if not self.dryrun or self.extattr:
+                copyxattr(dir, dst)
             # Continue traversal...
             visitfiles(dir, self)
         else:
@@ -236,6 +270,8 @@ class CopyBackupVisitor(TreeVisitor):
                 shutil.copystat(file, dst)
                 # Copy the owner/group values to destination.
                 chown(dst, stats[ST_UID], stats[ST_GID])
+            if not self.dryrun or self.extattr:
+                copyxattr(file, dst)
         else:
             odst = re.sub(self.curr, self.prev, dst)
             if self.verbose:
@@ -264,6 +300,8 @@ class CopyBackupVisitor(TreeVisitor):
                 # Copy link to destination.
                 os.symlink(lnk, dst)
                 chown(dst, stats[ST_UID], stats[ST_GID])
+            if not self.dryrun or self.extattr:
+                copyxattr(link, dst)
         else:
             odst = re.sub(self.curr, self.prev, dst)
             if self.verbose:
@@ -272,7 +310,7 @@ class CopyBackupVisitor(TreeVisitor):
                 # Create hard link in destination.
                 link(odst, dst)
 
-def copybackupdb(srcbase, dstbase, verbose, dryrun):
+def copybackupdb(srcbase, dstbase, verbose, dryrun, extattr):
     """Copy the backup database found in srcbase to dstbase."""
     # Validate that srcbase contains a backup database.
     srcdb = os.path.join(srcbase, 'Backups.backupdb')
@@ -297,15 +335,17 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun):
                 os.makedirs(target)
                 shutil.copystat(source, target)
                 chown(target, stats[ST_UID], stats[ST_GID])
+            if not dryrun or extattr:
+                copyxattr(source, target)
         # Copy initial backup.
         dst = os.path.join(dstdb, host)
         srcbkup = os.path.join(src, entries[0])
         dstbkup = os.path.join(dst, entries[0])
-        if os.path.exists(dstbkup):
+        if not extattr and os.path.exists(dstbkup):
             print "%s already exists, skipping..." % entries[0]
         else:
             mkdest(srcbkup, dstbkup)
-            visitor = CopyInitialVisitor(verbose, dryrun)
+            visitor = CopyInitialVisitor(verbose, dryrun, extattr)
             print "Copying backup %s -- this will probably take a while..." % entries[0]
             visitor.copytree(srcbkup, dstbkup)
         # Copy all subsequent backup snapshots.
@@ -316,11 +356,11 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun):
             previous = srcbkup
             srcbkup = os.path.join(src, entry)
             dstbkup = os.path.join(dst, entry)
-            if os.path.exists(dstbkup):
+            if not extattr and os.path.exists(dstbkup):
                 print "%s already exists, skipping..." % entry
             else:
                 mkdest(srcbkup, dstbkup)
-                visitor = CopyBackupVisitor(previous, prev, entry, verbose, dryrun)
+                visitor = CopyBackupVisitor(previous, prev, entry, verbose, dryrun, extattr)
                 print "Copying backup %s..." % entry
                 visitor.copytree(srcbkup, dstbkup)
             prev = entry
@@ -351,9 +391,11 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun):
                 shutil.copystat(src, dst)
                 stats = os.lstat(src)
                 chown(dst, stats[ST_UID], stats[ST_GID])
+            if not dryrun or extattr:
+                copyxattr(src, dst)
 
 def usage():
-    print "Usage: timecopy.py [-hnv] [--nochown] <source> <target>"
+    print "Usage: timecopy.py [-hnvx] [--nochown] <source> <target>"
     print ""
     print "Copies a Mac OS X Time Machine volume (set of backups) from one location"
     print "to another, such as from one disk to another, or from one disk image to"
@@ -384,14 +426,23 @@ def usage():
     print ""
     print "-v|--verbose"
     print "\tPrints information about what the script is doing at each step."
+    print ""
+    print "-x|--xattr"
+    print "\tCopies the extended attributes from the source volume to the target"
+    print "\tvolume, assuming that the target is an exact copy of the source."
+    print "\tThis is useful if you have a copy of a Time Machine volume that is"
+    print "\tmissing the necessary extended attributes. Normally this script"
+    print "\twill already have copied the extended attributes as part of the"
+    print "\tcopying process, so this option is only needed when you have created"
+    print "\tthe copy using some other means."
 
 def main():
     """The main program method which handles user input and kicks off
        the copying process."""
 
     # Parse the command line arguments.
-    shortopts = "hnv"
-    longopts = ["help", "dry-run", "nochown", "verbose"]
+    shortopts = "hnvx"
+    longopts = ["help", "dry-run", "nochown", "verbose", "xattr"]
     try:
         opts, args = getopt.getopt(sys.argv[1:], shortopts, longopts)
     except getopt.GetoptError, err:
@@ -400,6 +451,7 @@ def main():
         sys.exit(2)
     verbose = False
     dryrun = False
+    extattr = False
     for opt, val in opts:
         if opt in ("-v", "--verbose"):
             verbose = True
@@ -412,6 +464,11 @@ def main():
             # Nullify the chown function defined above.
             global chown
             chown = lambda path, uid, gid: ""
+        elif opt in ("-x", "--xattr"):
+            extattr = True
+            # Copying only the extended attributes means that no other
+            # file system changes will be made in the process.
+            dryrun = True
         else:
             assert False, "unhandled option: %s" % opt
     if len(args) != 2:
@@ -433,7 +490,7 @@ def main():
         print "%s is not a directory!" % dst
         sys.exit(1)
     try:
-        copybackupdb(src, dst, verbose, dryrun)
+        copybackupdb(src, dst, verbose, dryrun, extattr)
     except KeyboardInterrupt:
         print "Exiting..."
         sys.exit(1)
