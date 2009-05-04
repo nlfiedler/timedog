@@ -323,8 +323,12 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun, extattr):
     for host in hosts:
         # Get the list of backup snapshots sorted by name (i.e. date).
         src = os.path.join(srcdb, host)
+        mode = os.lstat(src)[ST_MODE]
+        if not S_ISDIR(mode):
+            print "Skipping %s..." % host
+            continue
         entries = os.listdir(src)
-        okay = lambda s: s != "Latest" and not s.endswith(".inProgress")
+        okay = lambda s: s != ".DS_Store" and s != "Latest" and not s.endswith(".inProgress")
         entries = [entry for entry in entries if okay(entry)]
         entries.sort()
         def mkdest(source, target):
