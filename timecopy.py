@@ -1,6 +1,6 @@
 #!/usr/bin/python
 #
-# Copyright (c) 2009 Nathan Fiedler
+# Copyright (c) 2009-2012 Nathan Fiedler
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -27,12 +27,17 @@ import os
 import os.path
 import re
 import shutil
-from stat import *
+import stat
 import subprocess
 import sys
 import time
-from xattr import xattr
-from xattr.constants import *
+import xattr
+import xattr.constants
+
+#
+# TODO: "too many open files" says get_tm_bandsize() on server the last time I tried using this
+#
+
 
 class TreeVisitor:
     """Visitor pattern for visitfiles function. As tree is traversed,
@@ -50,24 +55,25 @@ class TreeVisitor:
         """A symbolic link has been encountered."""
         pass
 
+
 def visitfiles(dir, visitor):
     "Calls the visitor for each entry encountered in the directory."
 
     for entry in os.listdir(dir):
         pathname = os.path.join(dir, entry)
         try:
-            mode = os.lstat(pathname)[ST_MODE]
-            if S_ISDIR(mode):
+            mode = os.lstat(pathname)[stat.ST_MODE]
+            if stat.S_ISDIR(mode):
                 visitor.dir(pathname)
-            elif S_ISLNK(mode):
+            elif stat.S_ISLNK(mode):
                 visitor.link(pathname)
-            elif S_ISREG(mode):
+            elif stat.S_ISREG(mode):
                 visitor.file(pathname)
             else:
                 print 'WARNING: unknown file %s' % pathname
         except OSError, e:
-            print 'ERROR "%s": reading %s' % (os.strerror(e.errno), pathname)
-            sys.exit(2)
+            print "ERROR '{}' processing {}".format(e, pathname)
+
 
 def chown(path, uid, gid):
     """Attempt to change the owner/group of the given file/directory using
@@ -87,8 +93,8 @@ def chown(path, uid, gid):
             # to non-existent entries, need to filter out and ignore
             # (we are most likely copying to an external disk anyway,
             # in which case all files are owned by the _unknown user).
-            mode = os.lstat(path)[ST_MODE]
-            if not S_ISLNK(mode):
+            mode = os.lstat(path)[stat.ST_MODE]
+            if not stat.S_ISLNK(mode):
                 # Sometimes mysteriously fails to chown directories.
                 # Try again in one second; if it fails again ignore
                 # the problem and move on.
@@ -100,6 +106,7 @@ def chown(path, uid, gid):
         else:
             raise e
 
+
 def link(src, dst):
     """Creates a hard link called 'dst' that points to 'src'.
        Ensures that the src entry exists and raises an error if not."""
@@ -108,25 +115,27 @@ def link(src, dst):
     else:
         raise OSError(errno.ENOENT, "%s missing!" % src)
 
+
 def copyxattr(src, dst):
     """Copy the extended attributes from src to dst using xattr."""
     # See http://pypi.python.org/pypi/xattr for a (possibly outdated)
     # version of xattr. A (possibly newer) version is included with
     # Python on the Mac.
-    sx = xattr(src)
-    dx = xattr(dst)
+    sx = xattr.xattr(src)
+    dx = xattr.xattr(dst)
     # Make sure not to follow symbolic links as we always work on the
     # links themselves, not the (possibly) non-existent target.
-    attrs = sx.list(XATTR_NOFOLLOW)
+    attrs = sx.list(xattr.constants.XATTR_NOFOLLOW)
     try:
         for name in attrs:
-            value = sx.get(name, XATTR_NOFOLLOW)
-            dx.set(name, value, XATTR_NOFOLLOW)
+            value = sx.get(name, xattr.constants.XATTR_NOFOLLOW)
+            dx.set(name, value, xattr.constants.XATTR_NOFOLLOW)
     except IOError:
         # Fails for certain directories which we will ignore.
         # All others, show a warning.
         if not dst.endswith(("/etc", "/tmp", "/var")):
             print "WARNING: cannot xattr %s" % dst
+
 
 class CopyInitialVisitor(TreeVisitor):
     """Copies a directory tree from one place to another."""
@@ -154,7 +163,7 @@ class CopyInitialVisitor(TreeVisitor):
             os.mkdir(dst)
             shutil.copystat(dir, dst)
             stats = os.lstat(dir)
-            chown(dst, stats[ST_UID], stats[ST_GID])
+            chown(dst, stats[stat.ST_UID], stats[stat.ST_GID])
         if not self.dryrun or self.extattr:
             copyxattr(dir, dst)
         # Continue traversal...
@@ -165,13 +174,16 @@ class CopyInitialVisitor(TreeVisitor):
         if self.verbose:
             print "cp <%s> <%s>" % (file, dst)
         if not self.dryrun:
-            # Copy file contents from snapshot to destination.
-            shutil.copyfile(file, dst)
-            # Copy the permissions and accessed/modified times.
-            shutil.copystat(file, dst)
-            # Copy the owner/group values to destination.
-            stats = os.lstat(file)
-            chown(dst, stats[ST_UID], stats[ST_GID])
+            try:
+                # Copy file contents from snapshot to destination.
+                shutil.copyfile(file, dst)
+                # Copy the permissions and accessed/modified times.
+                shutil.copystat(file, dst)
+                # Copy the owner/group values to destination.
+                stats = os.lstat(file)
+                chown(dst, stats[stat.ST_UID], stats[stat.ST_GID])
+            except IOError, e:
+                print "ERROR '{}' processing file {}".format(e, file)
         if not self.dryrun or self.extattr:
             copyxattr(file, dst)
 
@@ -184,9 +196,10 @@ class CopyInitialVisitor(TreeVisitor):
         if not self.dryrun:
             os.symlink(lnk, dst)
             stats = os.lstat(link)
-            chown(dst, stats[ST_UID], stats[ST_GID])
+            chown(dst, stats[stat.ST_UID], stats[stat.ST_GID])
         if not self.dryrun or self.extattr:
             copyxattr(link, dst)
+
 
 class CopyBackupVisitor(TreeVisitor):
     """Copies a directory tree and its files, where those entries differ
@@ -228,14 +241,14 @@ class CopyBackupVisitor(TreeVisitor):
             else:
                 raise e
         dst = re.sub(self.src, self.dst, dir)
-        if ostats is None or stats[ST_INO] != ostats[ST_INO]:
+        if ostats is None or stats[stat.ST_INO] != ostats[stat.ST_INO]:
             if self.verbose:
                 print "mkdir <%s>" % dst
             if not self.dryrun:
                 # Create destination directory, copying stats and ownership.
                 os.mkdir(dst)
                 shutil.copystat(dir, dst)
-                chown(dst, stats[ST_UID], stats[ST_GID])
+                chown(dst, stats[stat.ST_UID], stats[stat.ST_GID])
             if not self.dryrun or self.extattr:
                 copyxattr(dir, dst)
             # Continue traversal...
@@ -260,16 +273,19 @@ class CopyBackupVisitor(TreeVisitor):
                 ostats = None
             else:
                 raise e
-        if ostats is None or stats[ST_INO] != ostats[ST_INO]:
+        if ostats is None or stats[stat.ST_INO] != ostats[stat.ST_INO]:
             if self.verbose:
                 print "cp <%s> <%s>" % (file, dst)
             if not self.dryrun:
-                # Copy file contents from snapshot to destination.
-                shutil.copyfile(file, dst)
-                # Copy the permissions and accessed/modified times.
-                shutil.copystat(file, dst)
-                # Copy the owner/group values to destination.
-                chown(dst, stats[ST_UID], stats[ST_GID])
+                try:
+                    # Copy file contents from snapshot to destination.
+                    shutil.copyfile(file, dst)
+                    # Copy the permissions and accessed/modified times.
+                    shutil.copystat(file, dst)
+                    # Copy the owner/group values to destination.
+                    chown(dst, stats[stat.ST_UID], stats[stat.ST_GID])
+                except IOError, e:
+                    print "ERROR '{}' processing file {}".format(e, file)
             if not self.dryrun or self.extattr:
                 copyxattr(file, dst)
         else:
@@ -292,14 +308,14 @@ class CopyBackupVisitor(TreeVisitor):
                 ostats = None
             else:
                 raise e
-        if ostats is None or stats[ST_INO] != ostats[ST_INO]:
+        if ostats is None or stats[stat.ST_INO] != ostats[stat.ST_INO]:
             lnk = os.readlink(link)
             if self.verbose:
                 print "ln -s <%s> <%s>" % (lnk, dst)
             if not self.dryrun:
                 # Copy link to destination.
                 os.symlink(lnk, dst)
-                chown(dst, stats[ST_UID], stats[ST_GID])
+                chown(dst, stats[stat.ST_UID], stats[stat.ST_GID])
             if not self.dryrun or self.extattr:
                 copyxattr(link, dst)
         else:
@@ -309,6 +325,7 @@ class CopyBackupVisitor(TreeVisitor):
             if not self.dryrun:
                 # Create hard link in destination.
                 link(odst, dst)
+
 
 def copybackupdb(srcbase, dstbase, verbose, dryrun, extattr):
     """Copy the backup database found in srcbase to dstbase."""
@@ -320,17 +337,27 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun, extattr):
     dstdb = os.path.join(dstbase, 'Backups.backupdb')
     # Get a list of entries in the backupdb (typically just one).
     hosts = os.listdir(srcdb)
+
+    def goodhost(host):
+        src = os.path.join(srcdb, host)
+        mode = os.lstat(src)[stat.ST_MODE]
+        if len(host) > 0 and host[0] != '.' and stat.S_ISDIR(mode):
+            return True
+        return False
+    hosts = [host for host in hosts if goodhost(host)]
     for host in hosts:
         # Get the list of backup snapshots sorted by name (i.e. date).
         src = os.path.join(srcdb, host)
-        mode = os.lstat(src)[ST_MODE]
-        if not S_ISDIR(mode):
-            print "Skipping %s..." % host
-            continue
         entries = os.listdir(src)
-        okay = lambda s: s != ".DS_Store" and s != "Latest" and not s.endswith(".inProgress")
-        entries = [entry for entry in entries if okay(entry)]
+
+        def goodsnap(snap):
+            if snap == '.DS_Store' or snap == 'Latest'\
+                    or snap.endswith('.inProgress'):
+                return False
+            return True
+        entries = [entry for entry in entries if goodsnap(entry)]
         entries.sort()
+
         def mkdest(source, target):
             stats = os.lstat(source)
             if verbose:
@@ -338,7 +365,7 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun, extattr):
             if not dryrun:
                 os.makedirs(target)
                 shutil.copystat(source, target)
-                chown(target, stats[ST_UID], stats[ST_GID])
+                chown(target, stats[stat.ST_UID], stats[stat.ST_GID])
             if not dryrun or extattr:
                 copyxattr(source, target)
         # Copy initial backup.
@@ -350,7 +377,7 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun, extattr):
         else:
             mkdest(srcbkup, dstbkup)
             visitor = CopyInitialVisitor(verbose, dryrun, extattr)
-            print "Copying backup %s -- this will probably take a while..." % entries[0]
+            print "Copying backup %s -- this may take a while..." % entries[0]
             visitor.copytree(srcbkup, dstbkup)
         # Copy all subsequent backup snapshots.
         prev = entries[0]
@@ -364,7 +391,8 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun, extattr):
                 print "%s already exists, skipping..." % entry
             else:
                 mkdest(srcbkup, dstbkup)
-                visitor = CopyBackupVisitor(previous, prev, entry, verbose, dryrun, extattr)
+                visitor = CopyBackupVisitor(previous, prev, entry,
+                                            verbose, dryrun, extattr)
                 print "Copying backup %s..." % entry
                 visitor.copytree(srcbkup, dstbkup)
             prev = entry
@@ -379,7 +407,7 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun, extattr):
                 user = subprocess.Popen(["who", "am", "i"],
                         stdout=subprocess.PIPE).communicate()[0]
                 user = user.split()[0]
-                os.system("sudo -u %s unlink %s"% (user, latest))
+                os.system("sudo -u %s unlink %s" % (user, latest))
             os.symlink(entries[-1], latest)
     # Copy the MAC address dotfile(s) that TM creates.
     entries = os.listdir(srcbase)
@@ -391,54 +419,59 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun, extattr):
             if verbose:
                 print "cp <%s> <%s>" % (src, dst)
             if not dryrun:
-                shutil.copyfile(src, dst)
-                shutil.copystat(src, dst)
-                stats = os.lstat(src)
-                chown(dst, stats[ST_UID], stats[ST_GID])
+                try:
+                    shutil.copyfile(src, dst)
+                    shutil.copystat(src, dst)
+                    stats = os.lstat(src)
+                    chown(dst, stats[stat.ST_UID], stats[stat.ST_GID])
+                except IOError, e:
+                    print "ERROR '{}' processing file {}".format(e, src)
             if not dryrun or extattr:
                 copyxattr(src, dst)
 
+
 def usage():
-    print "Usage: timecopy.py [-hnvx] [--nochown] <source> <target>"
-    print ""
-    print "Copies a Mac OS X Time Machine volume (set of backups) from one location"
-    print "to another, such as from one disk to another, or from one disk image to"
-    print "another. This can be useful when block copying the disk is not feasible"
-    print "(i.e. the destination disk is smaller than the original)."
-    print ""
-    print "The <source> location must be the root directory of the source Time"
-    print "Machine volume, that which contains the 'Backups.backupdb' directory"
-    print "(e.g. /Volumes/Backup, not /Volumes/Backup/Backups.backupdb/gojira)."
-    print "You must have sufficient privileges to access this directory, and the"
-    print "Time Machine volume must already be mounted (read-only mode is okay)."
-    print ""
-    print "The <target> location should be the root of an empty volume to which the"
-    print "Time Machine backups will be copied. You must have sufficient privileges"
-    print "to write to this location. Chances are you will need to be using `sudo`"
-    print "to gain the necessary privileges, unless -n or --dry-run is given."
-    print ""
-    print "-h|--help"
-    print "\tPrints this usage information."
-    print ""
-    print "-n|--dry-run"
-    print "\tDo not make any changes on disk."
-    print ""
-    print "--nochown"
-    print "\tDo not use chown to change the owner/group of the destination"
-    print "\tfiles. Generally only root can do that, and on network volumes"
-    print "\tthe Mac will make everything owned by the 'unknown' user anyway."
-    print ""
-    print "-v|--verbose"
-    print "\tPrints information about what the script is doing at each step."
-    print ""
-    print "-x|--xattr"
-    print "\tCopies the extended attributes from the source volume to the target"
-    print "\tvolume, assuming that the target is an exact copy of the source."
-    print "\tThis is useful if you have a copy of a Time Machine volume that is"
-    print "\tmissing the necessary extended attributes. Normally this script"
-    print "\twill already have copied the extended attributes as part of the"
-    print "\tcopying process, so this option is only needed when you have created"
-    print "\tthe copy using some other means."
+    print """Usage: timecopy.py [-hnvx] [--nochown] <source> <target>
+
+Copies a Mac OS X Time Machine volume (set of backups) from one location
+to another, such as from one disk to another, or from one disk image to
+another. This can be useful when block copying the disk is not feasible
+(i.e. the destination disk is smaller than the original).
+
+The <source> location must be the root directory of the source Time
+Machine volume, that which contains the 'Backups.backupdb' directory
+(e.g. /Volumes/Backup, not /Volumes/Backup/Backups.backupdb/gojira).
+You must have sufficient privileges to access this directory, and the
+Time Machine volume must already be mounted (read-only mode is okay).
+
+The <target> location should be the root of an empty volume to which the
+Time Machine backups will be copied. You must have sufficient privileges
+to write to this location. Chances are you will need to be using `sudo`
+to gain the necessary privileges, unless -n or --dry-run is given.
+
+-h|--help
+\tPrints this usage information.
+
+-n|--dry-run
+\tDo not make any changes on disk.
+
+--nochown
+\tDo not use chown to change the owner/group of the destination
+\tfiles. Generally only root can do that, and on network volumes
+\tthe Mac will make everything owned by the 'unknown' user anyway.
+
+-v|--verbose
+\tPrints information about what the script is doing at each step.
+
+-x|--xattr
+\tCopies the extended attributes from the source volume to the target
+\tvolume, assuming that the target is an exact copy of the source.
+\tThis is useful if you have a copy of a Time Machine volume that is
+\tmissing the necessary extended attributes. Normally this script
+\twill already have copied the extended attributes as part of the
+\tcopying process, so this option is only needed when you have created
+\tthe copy using some other means."""
+
 
 def main():
     """The main program method which handles user input and kicks off
