@@ -52,7 +52,7 @@
 # 
 # LICENSE
 #
-#  Copyright (C) 2008, 2009 J.D. Smith
+#  Copyright (C) 2008, 2009, 2013 J.D. Smith
 #
 #  This file is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published
@@ -109,6 +109,11 @@ sub summarize {
     }
   }
 }
+
+use Cwd;
+chomp (my $tmdir=`tmutil machinedirectory`);
+(-d $tmdir && chdir $tmdir) ||
+  die "Cannot locate timemachine directory ($tmdir)";
 
 opendir DIR,"." or die "Can't open directory.";
 @files=sort grep {m|[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]+$|} readdir(DIR);
