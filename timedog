@@ -10,16 +10,20 @@
 # and new sizes of the changed files, along with the total file count
 # and backup size.  The string "...." denotes files created or deleted.
 #
-# Usage:  timedog [-d depth] [-l] [-n] [latest]
+# Usage:  timedog [-t] [-s] [-d depth] [-l] [-n] [-m size] [timestamp]
 #
 #   N.B. By default, timedog locates your Time Machine directory for
 #   you using tmutil.  You must first ensure the Time Machine volume
 #   is mounted.  The Time Machine directory can be found in
 #   /Volumes/TM/Backups.backupdb/hostname or similar.
 #
-#     latest: The backup directory for which you'd like to see the
+#     timestamp: The backup directory for which you'd like to see the
 #             changed contents.  Defaults to the most recent (the one
 #             linked to by Latest).
+#
+#         -t: Instead of comparing backups, show a list of the
+#             available backup timestamps which could be used for the
+#             'timestamp' argument.
 #
 #         -l: Omit symbolic links from the summary.  For whatever
 #             reason, Time Machine creates a new version of all
@@ -82,7 +86,7 @@ use Fcntl ':mode';
 use Getopt::Std;
 use Cwd;
 
-getopts('lnsd:m:');
+getopts('tlnsd:m:');
 
 sub bytes {
   my $bytes=shift;
@@ -123,6 +127,12 @@ chomp (my $tmdir=`tmutil machinedirectory`);
 opendir DIR,"." or die "Can't open directory.";
 @files=sort grep {m|[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]+$|} readdir(DIR);
 die "None or only one Time Machine backups found." if @files == 1;
+
+if ($opt_t) {
+  print join("\n",@files),"\n";
+  exit;
+}
+    
 
 if (@ARGV) {
   $latest=$ARGV[0];
