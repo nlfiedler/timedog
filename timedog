@@ -12,10 +12,10 @@
 #
 # Usage:  timedog [-d depth] [-l] [-n] [latest]
 #
-#   N.B. You must first mount the time machine volume, and change to
-#   the directory containing your time machine backup directories, the
-#   ones named like 2008-07-14-112245/.  This can be found in the
-#   directory /Volumes/TM/Backups.backupdb/hostname or similar.
+#   N.B. By default, timedog locates your Time Machine directory for
+#   you using tmutil.  You must first ensure the Time Machine volume
+#   is mounted.  The Time Machine directory can be found in
+#   /Volumes/TM/Backups.backupdb/hostname or similar.
 #
 #     latest: The backup directory for which you'd like to see the
 #             changed contents.  Defaults to the most recent (the one
@@ -43,8 +43,13 @@
 #             bytes).
 #
 # Example:
-#   % cd /Volumes/TM/Backups.backupdb/myhost
+#
 #   % timedog -d 5 -m 1k -ls
+#
+# Acknowledgements:
+#
+#    Nathan Fielder: Packaging and google code repo
+#    Lanny Rosicky: tmutil directory locator
 #
 ###############################################################################
 # $Id$
@@ -75,6 +80,7 @@
 use File::Find;
 use Fcntl ':mode';
 use Getopt::Std;
+use Cwd;
 
 getopts('lnsd:m:');
 
@@ -110,7 +116,6 @@ sub summarize {
   }
 }
 
-use Cwd;
 chomp (my $tmdir=`tmutil machinedirectory`);
 (-d $tmdir && chdir $tmdir) ||
   die "Cannot locate timemachine directory ($tmdir)";
