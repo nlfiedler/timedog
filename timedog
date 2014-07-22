@@ -46,19 +46,24 @@
 #             be specified as K, M, G, T for kilo-, mega-, giga-, tera-
 #             bytes).
 #
+#    -p path: If `tmutil machinedirectory` is hanging or not reporting
+#             correct results, use this option to specify the path to
+#             the machine directory.
+#             e.g. -p /Volumes/bakvol/Backups.backupdb/mymac
+#
 # Example:
 #
 #   % timedog -d 5 -m 1k -ls
 #
 # Acknowledgements:
 #
-#    Nathan Fielder: Packaging and google code repo
+#    Nathan Fiedler: Packaging and google code repo; -p option
 #    Lanny Rosicky: tmutil directory locator
 #
 ###############################################################################
 # $Id$
 ###############################################################################
-# 
+#
 # LICENSE
 #
 #  Copyright (C) 2008, 2009, 2013 J.D. Smith
@@ -86,7 +91,7 @@ use Fcntl ':mode';
 use Getopt::Std;
 use Cwd;
 
-getopts('tlnsd:m:');
+getopts('tlnsd:m:p:');
 
 sub bytes {
   my $bytes=shift;
@@ -120,7 +125,12 @@ sub summarize {
   }
 }
 
-chomp (my $tmdir=`tmutil machinedirectory`);
+my $tmdir;
+if ($opt_p) {
+  $tmdir = $opt_p;
+} else {
+  chomp ($tmdir=`tmutil machinedirectory`);
+}
 (-d $tmdir && chdir $tmdir) ||
   die "Cannot locate timemachine directory ($tmdir)";
 
@@ -132,7 +142,7 @@ if ($opt_t) {
   print join("\n",@files),"\n";
   exit;
 }
-    
+
 
 if (@ARGV) {
   $latest=$ARGV[0];
@@ -167,7 +177,7 @@ unless ($opt_n) {
     print "Omitting if smaller than: ",bytes($opt_m),"\n";
   } else { print "\n" if $opt_d;}
 }
-    
+
 find({wanted =>
       sub{
 	($dev,$ino,$mode,$nlink,$uid,$gid,$rdev,$size) =
