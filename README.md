@@ -45,7 +45,7 @@ At this point you will have the Time Machine backup image mounted and available 
 
 ## Copying Time Machine volumes
 
-If you have a need to copy a Time Machine volume without using a disk block copy utility, then [http://timedog.googlecode.com/svn/trunk/timecopy.py timecopy.py] might be for you. See the UsingTimecopy page for details on how this script can be used and why.
+If you have a need to copy a Time Machine volume without using a disk block copy utility, then [timecopy.py](./timecopy.py) might be for you. See the [UsingTimecopy](./UsingTimecopy.md) page for details on how this script can be used and why.
 
 ## Files Accessibility
 
