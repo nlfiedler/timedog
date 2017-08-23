@@ -1,6 +1,13 @@
 #!/usr/bin/python
+"""Copy a Time Machine volume.
+
+Invoke this script with '--help' option for detailed description of
+what it does and how you can use it.
+
+"""
+
 #
-# Copyright (c) 2009-2012 Nathan Fiedler
+# Copyright (c) 2009-2017 Nathan Fiedler
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -15,12 +22,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
-# $Id$
-#
-#
-# Invoke this script with '--help' option for detailed description of
-# what it does and how you can use it.
-#
+
 import errno
 import getopt
 import os
@@ -40,8 +42,11 @@ import xattr.constants
 
 
 class TreeVisitor:
-    """Visitor pattern for visitfiles function. As tree is traversed,
-    methods of the visitor are invoked."""
+
+    """Visitor pattern for visitfiles function.
+
+    As tree is traversed, methods of the visitor are invoked.
+    """
 
     def dir(self, dir):
         """A directory has been encountered."""
@@ -57,8 +62,7 @@ class TreeVisitor:
 
 
 def visitfiles(dir, visitor):
-    "Calls the visitor for each entry encountered in the directory."
-
+    """Calls the visitor for each entry encountered in the directory."""
     for entry in os.listdir(dir):
         pathname = os.path.join(dir, entry)
         try:
@@ -76,9 +80,11 @@ def visitfiles(dir, visitor):
 
 
 def chown(path, uid, gid):
-    """Attempt to change the owner/group of the given file/directory using
-       os.lchown(). If this fails due to insufficient permissions, display
-       an appropriate error message and exit. Otherwise, raise the error."""
+    """Attempt to change the owner/group of the given file/directory.
+
+    Uses os.lchown(). If this fails due to insufficient permissions, display
+    an appropriate error message and exit. Otherwise, raise the error.
+    """
     try:
         # Use lchown so we do not follow symbolic links, just change the
         # target as specified by the caller.
@@ -108,8 +114,10 @@ def chown(path, uid, gid):
 
 
 def link(src, dst):
-    """Creates a hard link called 'dst' that points to 'src'.
-       Ensures that the src entry exists and raises an error if not."""
+    """Create a hard link called 'dst' that points to 'src'.
+
+    Ensures that the src entry exists and raises an error if not.
+    """
     if os.path.exists(src):
         os.link(src, dst)
     else:
@@ -141,21 +149,24 @@ class CopyInitialVisitor(TreeVisitor):
     """Copies a directory tree from one place to another."""
 
     def __init__(self, verbose, dryrun, extattr):
-        """If verbose is True, display operations as they are performed
-           If dryrun is True, do not make any modifications on disk.
-           If extattr is True, just copy the extended attributes."""
+        """Initialize a CopyInitialVisitor.
+
+        If verbose is True, display operations as they are performed
+        If dryrun is True, do not make any modifications on disk.
+        If extattr is True, just copy the extended attributes.
+        """
         self.verbose = verbose
         self.dryrun = dryrun
         self.extattr = extattr
 
     def copytree(self, src, dst):
-        """Copies the directory tree rooted at src to dst."""
+        """Copy the directory tree rooted at src to dst."""
         self.src = src
         self.dst = dst
         visitfiles(src, self)
 
     def dir(self, dir):
-        # Create destination directory, copying stats and ownership.
+        """Create destination directory, copying stats and ownership."""
         dst = re.sub(self.src, self.dst, dir)
         if self.verbose:
             print "mkdir <%s>" % dst
@@ -170,6 +181,7 @@ class CopyInitialVisitor(TreeVisitor):
         visitfiles(dir, self)
 
     def file(self, file):
+        """Process a single file."""
         dst = re.sub(self.src, self.dst, file)
         if self.verbose:
             print "cp <%s> <%s>" % (file, dst)
@@ -188,7 +200,7 @@ class CopyInitialVisitor(TreeVisitor):
             copyxattr(file, dst)
 
     def link(self, link):
-        # Copy link to destination.
+        """Copy link to destination."""
         lnk = os.readlink(link)
         dst = re.sub(self.src, self.dst, link)
         if self.verbose:
@@ -202,20 +214,26 @@ class CopyInitialVisitor(TreeVisitor):
 
 
 class CopyBackupVisitor(TreeVisitor):
-    """Copies a directory tree and its files, where those entries differ
-       from a reference tree. That is, if any entry has the same inode
-       value as the corresponding entry in the reference tree, a new
-       hard link is made in the destination, and nothing further is
-       done with that entry (directories are not traversed, files are
-       not copied)."""
+    """Copy a directory tree and its files.
+
+    If any entry has the same inode value as the corresponding entry in the
+    reference tree, a new hard link is made in the destination, and nothing
+    further is done with that entry (directories are not traversed, files are
+    not copied).
+
+    """
 
     def __init__(self, old, prev, curr, verbose, dryrun, extattr):
-        """If verbose is True, display operations as they are performed
-           If dryrun is True, do not make any modifications on disk.
-           If extattr is True, just copy the extended attributes.
-           old is the reference tree to which src will be compared.
-           prev is the entry name of the previous backup.
-           curr is the entry name of the backup being copied"""
+        """Initialize a CopyBackupVisitor.
+
+        If verbose is True, display operations as they are performed
+        If dryrun is True, do not make any modifications on disk.
+        If extattr is True, just copy the extended attributes.
+        old is the reference tree to which src will be compared.
+        prev is the entry name of the previous backup.
+        curr is the entry name of the backup being copied.
+
+        """
         self.verbose = verbose
         self.dryrun = dryrun
         self.old = old
@@ -224,12 +242,13 @@ class CopyBackupVisitor(TreeVisitor):
         self.extattr = extattr
 
     def copytree(self, src, dst):
-        "Copy the tree rooted at src to dst"
+        """Copy the tree rooted at src to dst."""
         self.src = src
         self.dst = dst
         visitfiles(src, self)
 
     def dir(self, dir):
+        """Process a directory."""
         stats = os.lstat(dir)
         old = re.sub(self.src, self.old, dir)
         try:
@@ -262,6 +281,7 @@ class CopyBackupVisitor(TreeVisitor):
                 link(odst, dst)
 
     def file(self, file):
+        """Process a file."""
         stats = os.lstat(file)
         old = re.sub(self.src, self.old, file)
         dst = re.sub(self.src, self.dst, file)
@@ -297,6 +317,7 @@ class CopyBackupVisitor(TreeVisitor):
                 link(odst, dst)
 
     def link(self, link):
+        """Process a link."""
         stats = os.lstat(link)
         old = re.sub(self.src, self.old, link)
         dst = re.sub(self.src, self.dst, link)
@@ -404,8 +425,9 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun, extattr):
             if os.path.lexists(latest):
                 # Seems root cannot delete the symlink, so have the real
                 # user perform the delete for us.
-                user = subprocess.Popen(["who", "am", "i"],
-                        stdout=subprocess.PIPE).communicate()[0]
+                user = subprocess.Popen(
+                    ["who", "am", "i"], stdout=subprocess.PIPE
+                    ).communicate()[0]
                 user = user.split()[0]
                 os.system("sudo -u %s unlink %s" % (user, latest))
             os.symlink(entries[-1], latest)
@@ -431,6 +453,7 @@ def copybackupdb(srcbase, dstbase, verbose, dryrun, extattr):
 
 
 def usage():
+    """Display a usage summary."""
     print """Usage: timecopy.py [-hnvx] [--nochown] <source> <target>
 
 Copies a Mac OS X Time Machine volume (set of backups) from one location
@@ -474,9 +497,7 @@ to gain the necessary privileges, unless -n or --dry-run is given.
 
 
 def main():
-    """The main program method which handles user input and kicks off
-       the copying process."""
-
+    """Parse command line arguments and do the work."""
     # Parse the command line arguments.
     shortopts = "hnvx"
     longopts = ["help", "dry-run", "nochown", "verbose", "xattr"]
@@ -531,6 +552,7 @@ def main():
     except KeyboardInterrupt:
         print "Exiting..."
         sys.exit(1)
+
 
 if __name__ == '__main__':
     main()
