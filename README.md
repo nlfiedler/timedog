@@ -56,3 +56,18 @@ If your time machine backup includes files which are not reachable or readable a
 ```
 $ sudo /path/to/timedog -d 5 -l
 ```
+
+## Troubleshooting
+
+### Operation not permitted on Mojave
+
+By default the Mojave release of macOS does not grant access to certain areas of the file system. To get around this restriction, simply grant the terminal application full disk access prior to using `timedog`. The steps are outlined below.
+
+1. Open the Apple menu and choose **System Preferences**
+1. Select the **Security & Privacy** control panel
+1. Select the **Privacy** tab
+1. In the left panel choose _Full Disk Access_
+1. Click the lock icon in the corner of the window to gain admin privileges
+1. Click the **+** button to add an application with full disk access
+1. Find and select the terminal application that you normally use (e.g. `Terminal.app` or `iTerm`)
+1. Start your terminal (again) and you should have full access
