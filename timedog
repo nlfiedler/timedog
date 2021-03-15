@@ -192,7 +192,7 @@ chomp($tmpath = `tmutil machinedirectory`) if !$tmpath;
 die "No TimeMachine backups found" if !($tmpath && -d $tmpath);
 
 # Get all available backups
-my @backups=sort glob(qq("$tmpath/20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]"));
+my @backups=sort glob(qq("$tmpath/20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9].previous"));
 map { s|^$tmpath/||; } @backups; 
 die "None or only one Time Machine backups found" if @backups <= 1;
 
