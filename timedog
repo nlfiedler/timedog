@@ -31,7 +31,7 @@ timedog - script to display the files backed up by time machine
 
 =head1 SYNOPSIS
 
-  timedog -?
+  timedog -h
   timedog -t
   timedog [-vlsHn] [-d depth] [-S sort] [-m limit] [-D backupdir] [timestamp]
 
@@ -131,7 +131,7 @@ Use of tmutil to locate the time machine backup directory.
 =item Hayo Baan:
 
 Code rewrite & bug fixes.
-Additional help (-? or -h), verbose (-v), sort (-S), display (-H), and backup directory (-D) options.
+Additional help (-h), verbose (-v), sort (-S), display (-H), and backup directory (-D) options.
 Documentation and help (perlpod).
 
 =back

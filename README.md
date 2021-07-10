@@ -5,8 +5,11 @@ timedog is a Perl script that displays the set of files that were saved for any 
 ## Usage
 
 1. Open Terminal (in `/Applications/Utilities`)
+1. `/path/to/timedog -h`
+    * Displays the interactive help, using a pager, from which you can exit by pressing `q`
 1. `/path/to/timedog -d 5 -l`
     * For instance, if you unzipped `timedog` to your Desktop, the path would be `~/Desktop/timedog`
+    * If you change to the directory containing `timedog`, then `./timedog` also works.
 
 The example above uses the options `-d 5 -l` which will summarize the changes up to five directory levels deep, and hide rows that pertain to symbolic links. These links are often meaningless and can safely be ignored.
 
