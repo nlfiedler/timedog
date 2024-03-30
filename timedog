@@ -102,14 +102,6 @@ Display sizes using base 10 sizes (default is base 2).
 Use simple fixed width formatting (useful for spreadsheets or other
 parsing).
 
-=item B<-D <dir>>
-
-Use specified directory as time machine backup directory. By default,
-tmutil will be used to determine this from the system settings.
-
-Note: provide the full path, to the root of the backups. E.g.:
-/Volumes/TM/Backups.backupdb/hostname
-
 =item B<timestamp:>
 
 The backup directory for which you'd like to see the changed contents.  Defaults to the most recent (the one linked to by "Latest" in the backup directory)
@@ -162,8 +154,8 @@ $Getopt::Std::STANDARD_HELP_VERSION = 1;
 ################################################################################
 
 # Process the options
-our ($opt_h, $opt_t, $opt_v, $opt_d, $opt_l, $opt_s, $opt_S, $opt_m, $opt_H, $opt_n, $opt_D);
-getopts('?htvd:lsS:m:HnD:') || usage();
+our ($opt_h, $opt_t, $opt_v, $opt_d, $opt_l, $opt_s, $opt_S, $opt_m, $opt_H, $opt_n);
+getopts('?htvd:lsS:m:Hn') || usage();
 {
   no strict 'refs';
   help() if ${'opt_?'} || $opt_h;
@@ -186,19 +178,14 @@ if ($opt_m) {
     $opt_m *= $bases{uc $2} if $2;
 }
 
-# Locate time machine backups
-my $tmpath = $opt_D;
-chomp($tmpath = `tmutil machinedirectory`) if !$tmpath;
-die "No TimeMachine backups found" if !($tmpath && -d $tmpath);
-
 # Get all available backups
-my @backups=sort glob(qq("$tmpath/20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]{,.previous}"));
-map { s|^$tmpath/||; } @backups; 
+my @backups=`tmutil listbackups -m`;
+chomp @backups;
 die "None or only one Time Machine backups found" if @backups <= 1;
 
 # With -t, just list all available backups and exit
 if ($opt_t) {
-  print join("\n",@backups),"\n";
+  print join("\n", map { s/.*(\d{4}-\d{2}-\d{2}-\d{6}).*/$1/r } @backups),"\n";
   exit;
 }
 
@@ -209,7 +196,7 @@ if (@ARGV) {
     $latest =~ s|/$||;
     $latest =~ s/([0-9]{4})-?([0-9]{2})-?([0-9]{2})-?([0-9]{6})/$1-$2-$3-$4/; # So that timestamp can be given with and without dashes
     for (@backups) {
-        last if $_ eq $latest;
+        if (/$latest/) { $latest = $_; last; }
         $last=$_;
     }
     die "Invalid backup directory $latest specified" if !defined($last) || $last eq $latest;
@@ -217,9 +204,9 @@ if (@ARGV) {
     ($last,$latest)=@backups[$#backups-1..$#backups];
 }
 
-print "==> Comparing TM backup $latest to $last\n" unless $opt_n;
-$last = "$tmpath/$last";
-$latest = "$tmpath/$latest";
+print "==> Comparing TM backup ".
+	$latest =~ s/.*(\d{4}-\d{2}-\d{2}-\d{6}).*/$1/r ." to ".
+	$last =~ s/.*(\d{4}-\d{2}-\d{2}-\d{6}).*/$1/r . "\n" unless $opt_n;
 
 unless ($opt_n || !$opt_v) {
     print "  Depth: $opt_d directories\n" if defined $opt_d;
