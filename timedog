@@ -123,7 +123,7 @@ Use of tmutil to locate the time machine backup directory.
 =item Hayo Baan:
 
 Code rewrite & bug fixes.
-Additional help (-h), verbose (-v), sort (-S), display (-H), and backup directory (-D) options.
+Additional help (-h), verbose (-v), sort (-S), and display (-H) options.
 Documentation and help (perlpod).
 
 =back
