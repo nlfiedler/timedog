@@ -33,7 +33,7 @@ timedog - script to display the files backed up by time machine
 
   timedog -h
   timedog -t
-  timedog [-vlsHn] [-d depth] [-S sort] [-m limit] [-D backupdir] [timestamp]
+  timedog [-vlsHn] [-d depth] [-S sort] [-m limit] [timestamp]
 
 =head1 DESCRIPTION
 
